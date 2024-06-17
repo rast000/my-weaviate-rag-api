@@ -51,12 +51,20 @@ class FilteredRetriever(RunnableSerializable):
         return self._call_with_config(self._invoke, input, config, **kwargs)
 
 
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
 # RAG
 model = ChatOpenAI()
-chain = (
-    RunnableParallel(
-        {
-            "context": FilteredRetriever(
+rag_chain_from_docs = (
+    RunnablePassthrough.assign(context=(lambda x: format_docs(x["context"])))
+    | prompt
+    | model
+    | StrOutputParser()
+)
+
+rag_chain_with_source = RunnableParallel(
+    {"context": FilteredRetriever(
                 vectorstore=vectorstore, document_id=None
             ).configurable_fields(
                 document_id=ConfigurableField(
@@ -64,19 +72,12 @@ chain = (
                     name="Document",
                     description="Document for context",
                 )
-            ),
-            "question": RunnablePassthrough(),
-        }
-    )
-    | prompt
-    | model
-    | StrOutputParser()
-)
-
+            ), "question": RunnablePassthrough()}
+).assign(answer=rag_chain_from_docs).assign(context=(lambda x: format_docs(x["context"])))
 
 # Add typing for input
 class Question(BaseModel):
     __root__: str
 
 
-chain = chain.with_types(input_type=Question)
+chain = rag_chain_with_source.with_types(input_type=Question)
